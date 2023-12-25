@@ -1,6 +1,5 @@
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::net::{TcpListener, TcpStream};
-use std::thread;
 
 fn main() {
     println!("Logs from your program will appear here!");
@@ -10,9 +9,7 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                thread::spawn(move || {
-                    handle_response(stream);
-                });
+                handle_response(stream);
             }
             Err(e) => {
                 println!("error: {}", e);
