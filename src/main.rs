@@ -37,7 +37,7 @@ fn handle_response(stream: TcpStream) {
             }
         };
 
-        writer.write(message.as_bytes()).unwrap();
+        writer.write_all(message.as_bytes()).unwrap();
         writer.flush().unwrap();
     }
 }
