@@ -28,15 +28,20 @@ fn handle_response(stream: TcpStream) {
     // iterate over stream and use the lines() method to get an iterator
     println!("accepted new connection");
     for line_result in reader.lines() {
-        let _line = match line_result {
-            Ok(line) => line,
+        let line = match line_result {
+            Ok(line) => line.trim().to_uppercase(),
             Err(e) => {
                 println!("error: {}", e);
                 return;
             }
         };
 
-        writer.write_all(b"+PONG\r\n").unwrap();
-        writer.flush().unwrap();
+        match line.trim() {
+            "PING" => {
+                writer.write_all(b"+PONG\r\n").unwrap();
+                writer.flush().unwrap();
+            }
+            _ => {}
+        }
     }
 }
