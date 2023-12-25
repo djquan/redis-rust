@@ -22,7 +22,6 @@ fn main() {
 }
 
 fn handle_response(stream: TcpStream) {
-    let message = "+PONG\r\n";
     let reader = BufReader::new(&stream);
     let mut writer = BufWriter::new(&stream);
 
@@ -37,7 +36,7 @@ fn handle_response(stream: TcpStream) {
             }
         };
 
-        writer.write_all(message.as_bytes()).unwrap();
+        writer.write_all(b"+PONG\r\n").unwrap();
         writer.flush().unwrap();
     }
 }
