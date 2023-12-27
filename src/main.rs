@@ -1,11 +1,17 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufReader, BufWriter, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use crate::parser::RespType;
 
 mod parser;
+
+struct DbEntry {
+    value: String,
+    ttl: u64,
+}
 
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
@@ -13,12 +19,16 @@ fn main() {
 }
 
 fn listen_and_serve(listener: TcpListener) {
+    let db: Mutex<HashMap<String, DbEntry>> = Mutex::new(HashMap::new());
+    let counter = Arc::new(db);
+
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
+                let thread_db = Arc::clone(&counter);
                 thread::spawn(move || {
                     loop {
-                        handle_response(&stream);
+                        handle_response(&stream, &thread_db);
                     }
                 });
             }
@@ -29,13 +39,17 @@ fn listen_and_serve(listener: TcpListener) {
     }
 }
 
-fn handle_response(stream: &TcpStream) {
+fn handle_response(stream: &TcpStream, counter: &Arc<Mutex<HashMap<String, DbEntry>>>) {
     let mut reader = BufReader::new(stream);
     let mut writer = BufWriter::new(stream);
 
     let parsed = parser::parse(&mut reader);
 
     let mut commands = match parsed {
+        RespType::EOF() => {
+            return;
+        }
+
         RespType::BulkString(_, _) => {
             panic!("First response should be an array")
         }
@@ -44,7 +58,6 @@ fn handle_response(stream: &TcpStream) {
             VecDeque::from(commands)
         }
     };
-
 
     while commands.len() > 0 {
         let command = commands.pop_front().unwrap();
@@ -65,7 +78,57 @@ fn handle_response(stream: &TcpStream) {
                             _ => {}
                         }
                     }
-                    _ => {}
+                    "SET" => {
+                        let key = match commands.pop_front().unwrap() {
+                            RespType::BulkString(key, _) => {
+                                key
+                            }
+                            _ => {
+                                panic!("Expected a bulk string")
+                            }
+                        };
+                        let value = match commands.pop_front().unwrap() {
+                            RespType::BulkString(value, _) => {
+                                value
+                            }
+                            _ => {
+                                panic!("Expected a bulk string")
+                            }
+                        };
+
+                        let mut db = counter.lock().unwrap();
+                        db.insert(key, DbEntry {
+                            value,
+                            ttl: 0,
+                        });
+
+                        writer.write_all(b"+OK\r\n").unwrap();
+                        writer.flush().unwrap();
+                    }
+                    "GET" => {
+                        let key = match commands.pop_front().unwrap() {
+                            RespType::BulkString(key, _) => {
+                                key
+                            }
+                            _ => {
+                                panic!("Expected a bulk string")
+                            }
+                        };
+                        let db = counter.lock().unwrap();
+
+                        match db.get(&key) {
+                            None => {
+                                writer.write_all(b"$-1\r\n").unwrap();
+                            }
+                            Some(entry) => {
+                                writer.write_all(format!("${}\r\n{}\r\n", entry.value.len(), entry.value).as_bytes()).unwrap();
+                            }
+                        }
+                        writer.flush().unwrap();
+                    }
+                    _ => {
+                        return;
+                    }
                 }
             }
             _ => {}
@@ -107,6 +170,38 @@ mod tests {
         let received = String::from_utf8_lossy(&buffer[..n_bytes]);
 
         assert_eq!(received, "$4\r\nHIHI\r\n");
+    }
+
+    #[test]
+    fn get_set_works() {
+        let addr = start_server();
+
+        let mut stream = TcpStream::connect(addr).expect("Failed to connect to server");
+        stream.write_all(b"*3\r\n$3\r\nSET\r\n$2\r\nHI\r\n$3\r\nBYE\r\n").unwrap();
+
+        let mut buffer = [0; 1024];
+        let n_bytes = stream.read(&mut buffer).expect("Failed to read from stream");
+        let received = String::from_utf8_lossy(&buffer[..n_bytes]);
+
+        assert_eq!(received, "+OK\r\n");
+
+        let mut stream = TcpStream::connect(addr).expect("Failed to connect to server");
+        stream.write_all(b"*2\r\n$3\r\nGET\r\n$2\r\nHI\r\n").unwrap();
+
+        let mut buffer = [0; 1024];
+        let n_bytes = stream.read(&mut buffer).expect("Failed to read from stream");
+        let received = String::from_utf8_lossy(&buffer[..n_bytes]);
+
+        assert_eq!(received, "$3\r\nBYE\r\n");
+
+        let mut stream = TcpStream::connect(addr).expect("Failed to connect to server");
+        stream.write_all(b"*2\r\n$3\r\nGET\r\n$2\r\nBYE\r\n").unwrap();
+
+        let mut buffer = [0; 1024];
+        let n_bytes = stream.read(&mut buffer).expect("Failed to read from stream");
+        let received = String::from_utf8_lossy(&buffer[..n_bytes]);
+
+        assert_eq!(received, "$-1\r\n");
     }
 
     fn start_server() -> SocketAddr {

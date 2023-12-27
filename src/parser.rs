@@ -1,6 +1,6 @@
 use std::io::{BufRead, BufReader, Read};
 
-use crate::parser::RespType::{Array, BulkString};
+use crate::parser::RespType::{Array, BulkString, EOF};
 
 // create a type for a Redis Serialization Protocol Data class
 
@@ -8,12 +8,18 @@ use crate::parser::RespType::{Array, BulkString};
 pub enum RespType {
     BulkString(String, Vec<u8>),
     Array(Vec<RespType>, Vec<u8>),
+    EOF(),
 }
 
 pub(crate) fn parse<T: Read>(buf_reader: &mut BufReader<T>) -> RespType {
     // read one byte from buf_reader
     let mut buf = [0; 1];
-    buf_reader.read_exact(&mut buf).expect("Expect to read a byte");
+    match buf_reader.read_exact(&mut buf) {
+        Ok(_) => {}
+        Err(_) => {
+            return EOF();
+        }
+    }
 
     match buf[0] {
         b'*' => parse_array(buf_reader),
