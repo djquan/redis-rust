@@ -10,7 +10,7 @@ mod parser;
 
 struct DbEntry {
     value: String,
-    ttl: u64,
+    ttl: u128,
 }
 
 fn main() {
@@ -96,10 +96,37 @@ fn handle_response(stream: &TcpStream, counter: &Arc<Mutex<HashMap<String, DbEnt
                             }
                         };
 
+                        let ttl = if commands.len() > 0 {
+                            match commands.pop_front().unwrap() {
+                                RespType::BulkString(s, bytes) => {
+                                    if s.to_uppercase() == "PX" {
+                                        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+                                        match commands.pop_front().unwrap() {
+                                            RespType::BulkString(s, bytes) => {
+                                                s.parse::<u128>().unwrap() + now
+                                            }
+                                            _ => {
+                                                panic!("Expected a bulk string")
+                                            }
+                                        }
+                                    } else {
+                                        commands.push_front(RespType::BulkString(s, bytes));
+                                        0
+                                    }
+                                }
+                                command => {
+                                    commands.push_front(command);
+                                    0
+                                }
+                            }
+                        } else {
+                            0
+                        };
+
                         let mut db = counter.lock().unwrap();
                         db.insert(key, DbEntry {
                             value,
-                            ttl: 0,
+                            ttl,
                         });
 
                         writer.write_all(b"+OK\r\n").unwrap();
@@ -114,14 +141,21 @@ fn handle_response(stream: &TcpStream, counter: &Arc<Mutex<HashMap<String, DbEnt
                                 panic!("Expected a bulk string")
                             }
                         };
-                        let db = counter.lock().unwrap();
+                        let mut db = counter.lock().unwrap();
 
                         match db.get(&key) {
                             None => {
                                 writer.write_all(b"$-1\r\n").unwrap();
                             }
                             Some(entry) => {
-                                writer.write_all(format!("${}\r\n{}\r\n", entry.value.len(), entry.value).as_bytes()).unwrap();
+                                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+
+                                if entry.ttl != 0 && entry.ttl < now {
+                                    db.remove(&key);
+                                    writer.write_all(b"$-1\r\n").unwrap();
+                                } else {
+                                    writer.write_all(format!("${}\r\n{}\r\n", entry.value.len(), entry.value).as_bytes()).unwrap();
+                                }
                             }
                         }
                         writer.flush().unwrap();
