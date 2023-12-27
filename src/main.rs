@@ -1,6 +1,11 @@
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::collections::VecDeque;
+use std::io::{BufReader, BufWriter, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
+
+use crate::parser::RespType;
+
+mod parser;
 
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
@@ -23,22 +28,43 @@ fn listen_and_serve(listener: TcpListener) {
 }
 
 fn handle_response(stream: TcpStream) {
-    let reader = BufReader::new(&stream);
+    let mut reader = BufReader::new(&stream);
     let mut writer = BufWriter::new(&stream);
 
-    for line_result in reader.lines() {
-        let line = match line_result {
-            Ok(line) => line.trim().to_uppercase(),
-            Err(e) => {
-                println!("error: {}", e);
-                return;
-            }
-        };
+    let parsed = parser::parse(&mut reader);
 
-        match line.trim() {
-            "PING" => {
-                writer.write_all(b"+PONG\r\n").unwrap();
-                writer.flush().unwrap();
+    let mut commands = match parsed {
+        RespType::BulkString(_, _) => {
+            panic!("First response should be an array")
+        }
+
+        RespType::Array(commands, _) => {
+            VecDeque::from(commands)
+        }
+    };
+
+
+    while commands.len() > 0 {
+        let command = commands.pop_front().unwrap();
+        match command {
+            RespType::BulkString(command, _) => {
+                match command.to_uppercase().as_str() {
+                    "PING" => {
+                        writer.write_all(b"+PONG\r\n").unwrap();
+                        writer.flush().unwrap();
+                    }
+                    "ECHO" => {
+                        let echo = commands.pop_front().unwrap();
+                        match echo {
+                            RespType::BulkString(echo, _) => {
+                                writer.write_all(format!("${}\r\n{}\r\n", echo.len(), echo).as_bytes()).unwrap();
+                                writer.flush().unwrap();
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
             }
             _ => {}
         }
@@ -63,9 +89,22 @@ mod tests {
         let mut buffer = [0; 1024];
         let n_bytes = stream.read(&mut buffer).expect("Failed to read from stream");
         let received = String::from_utf8_lossy(&buffer[..n_bytes]);
-        stream.shutdown(std::net::Shutdown::Both).unwrap();
 
         assert_eq!(received, "+PONG\r\n");
+    }
+
+    #[test]
+    fn echo_works() {
+        let addr = start_server();
+
+        let mut stream = TcpStream::connect(addr).expect("Failed to connect to server");
+        stream.write_all(b"*2\r\n$4\r\nECHO\r\n$4\r\nHIHI\r\n").unwrap();
+
+        let mut buffer = [0; 1024];
+        let n_bytes = stream.read(&mut buffer).expect("Failed to read from stream");
+        let received = String::from_utf8_lossy(&buffer[..n_bytes]);
+
+        assert_eq!(received, "$4\r\nHIHI\r\n");
     }
 
     fn start_server() -> SocketAddr {
