@@ -50,11 +50,11 @@ fn handle_response(stream: &TcpStream, counter: &Arc<Mutex<HashMap<String, DbEnt
             return;
         }
 
-        RespType::BulkString(_, _) => {
+        RespType::BulkString(_) => {
             panic!("First response should be an array")
         }
 
-        RespType::Array(commands, _) => {
+        RespType::Array(commands) => {
             VecDeque::from(commands)
         }
     };
@@ -62,7 +62,7 @@ fn handle_response(stream: &TcpStream, counter: &Arc<Mutex<HashMap<String, DbEnt
     while commands.len() > 0 {
         let command = commands.pop_front().unwrap();
         match command {
-            RespType::BulkString(command, _) => {
+            RespType::BulkString(command) => {
                 match command.to_uppercase().as_str() {
                     "PING" => {
                         writer.write_all(b"+PONG\r\n").unwrap();
@@ -71,7 +71,7 @@ fn handle_response(stream: &TcpStream, counter: &Arc<Mutex<HashMap<String, DbEnt
                     "ECHO" => {
                         let echo = commands.pop_front().unwrap();
                         match echo {
-                            RespType::BulkString(echo, _) => {
+                            RespType::BulkString(echo) => {
                                 writer.write_all(format!("${}\r\n{}\r\n", echo.len(), echo).as_bytes()).unwrap();
                                 writer.flush().unwrap();
                             }
@@ -80,7 +80,7 @@ fn handle_response(stream: &TcpStream, counter: &Arc<Mutex<HashMap<String, DbEnt
                     }
                     "SET" => {
                         let key = match commands.pop_front().unwrap() {
-                            RespType::BulkString(key, _) => {
+                            RespType::BulkString(key) => {
                                 key
                             }
                             _ => {
@@ -88,7 +88,7 @@ fn handle_response(stream: &TcpStream, counter: &Arc<Mutex<HashMap<String, DbEnt
                             }
                         };
                         let value = match commands.pop_front().unwrap() {
-                            RespType::BulkString(value, _) => {
+                            RespType::BulkString(value) => {
                                 value
                             }
                             _ => {
@@ -98,11 +98,11 @@ fn handle_response(stream: &TcpStream, counter: &Arc<Mutex<HashMap<String, DbEnt
 
                         let ttl = if commands.len() > 0 {
                             match commands.pop_front().unwrap() {
-                                RespType::BulkString(s, bytes) => {
+                                RespType::BulkString(s) => {
                                     if s.to_uppercase() == "PX" {
                                         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
                                         match commands.pop_front().unwrap() {
-                                            RespType::BulkString(s, bytes) => {
+                                            RespType::BulkString(s) => {
                                                 s.parse::<u128>().unwrap() + now
                                             }
                                             _ => {
@@ -110,7 +110,7 @@ fn handle_response(stream: &TcpStream, counter: &Arc<Mutex<HashMap<String, DbEnt
                                             }
                                         }
                                     } else {
-                                        commands.push_front(RespType::BulkString(s, bytes));
+                                        commands.push_front(RespType::BulkString(s));
                                         0
                                     }
                                 }
@@ -134,7 +134,7 @@ fn handle_response(stream: &TcpStream, counter: &Arc<Mutex<HashMap<String, DbEnt
                     }
                     "GET" => {
                         let key = match commands.pop_front().unwrap() {
-                            RespType::BulkString(key, _) => {
+                            RespType::BulkString(key) => {
                                 key
                             }
                             _ => {
@@ -175,6 +175,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpListener, TcpStream};
     use std::thread;
+    use std::time::Duration;
 
     use crate::listen_and_serve;
 
@@ -236,6 +237,51 @@ mod tests {
         let received = String::from_utf8_lossy(&buffer[..n_bytes]);
 
         assert_eq!(received, "$-1\r\n");
+    }
+
+    #[test]
+    fn get_set_works_with_expiration() {
+        let addr = start_server();
+
+        let mut stream = TcpStream::connect(addr).expect("Failed to connect to server");
+        stream.write_all(b"*5\r\n$3\r\nSET\r\n$2\r\nHI\r\n$3\r\nBYE\r\n$2\r\nPX\r\n$1\r\n1\r\n").unwrap();
+
+        let mut buffer = [0; 1024];
+        let n_bytes = stream.read(&mut buffer).expect("Failed to read from stream");
+        let received = String::from_utf8_lossy(&buffer[..n_bytes]);
+
+        assert_eq!(received, "+OK\r\n");
+
+        thread::sleep(Duration::from_millis(10));
+
+        let mut stream = TcpStream::connect(addr).expect("Failed to connect to server");
+        stream.write_all(b"*2\r\n$3\r\nGET\r\n$2\r\nHI\r\n").unwrap();
+
+        let mut buffer = [0; 1024];
+        let n_bytes = stream.read(&mut buffer).expect("Failed to read from stream");
+        let received = String::from_utf8_lossy(&buffer[..n_bytes]);
+
+        assert_eq!(received, "$-1\r\n");
+
+        let addr = start_server();
+
+        let mut stream = TcpStream::connect(addr).expect("Failed to connect to server");
+        stream.write_all(b"*5\r\n$3\r\nSET\r\n$2\r\nHI\r\n$3\r\nBYE\r\n$2\r\nPX\r\n$5\r\n10000\r\n").unwrap();
+
+        let mut buffer = [0; 1024];
+        let n_bytes = stream.read(&mut buffer).expect("Failed to read from stream");
+        let received = String::from_utf8_lossy(&buffer[..n_bytes]);
+
+        assert_eq!(received, "+OK\r\n");
+
+        let mut stream = TcpStream::connect(addr).expect("Failed to connect to server");
+        stream.write_all(b"*2\r\n$3\r\nGET\r\n$2\r\nHI\r\n").unwrap();
+
+        let mut buffer = [0; 1024];
+        let n_bytes = stream.read(&mut buffer).expect("Failed to read from stream");
+        let received = String::from_utf8_lossy(&buffer[..n_bytes]);
+
+        assert_eq!(received, "$3\r\nBYE\r\n");
     }
 
     fn start_server() -> SocketAddr {

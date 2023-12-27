@@ -6,8 +6,8 @@ use crate::parser::RespType::{Array, BulkString, EOF};
 
 #[derive(PartialEq, Debug)]
 pub enum RespType {
-    BulkString(String, Vec<u8>),
-    Array(Vec<RespType>, Vec<u8>),
+    BulkString(String),
+    Array(Vec<RespType>),
     EOF(),
 }
 
@@ -38,7 +38,7 @@ fn parse_bulk_string<T: Read>(reader: &mut BufReader<T>) -> RespType {
     reader.read_exact(&mut data).expect("Expect to read data");
     reader.read_exact(&mut [0; 2]).expect("Expect to read CRLF");
 
-    return BulkString(String::from_utf8_lossy(&data).to_string(), vec![]);
+    return BulkString(String::from_utf8_lossy(&data).to_string());
 }
 
 fn parse_array<T: Read>(reader: &mut BufReader<T>) -> RespType {
@@ -53,7 +53,7 @@ fn parse_array<T: Read>(reader: &mut BufReader<T>) -> RespType {
         result.push(parse(reader));
     }
 
-    return Array(result, vec![]);
+    return Array(result);
 }
 
 #[cfg(test)]
@@ -67,9 +67,9 @@ mod tests {
         let mut reader = BufReader::new("*1\r\n$4\r\nPING\r\n".as_bytes());
         let result = parse(&mut reader);
 
-        let expected = vec![RespType::BulkString("PING".to_string(), vec![])];
+        let expected = vec![RespType::BulkString("PING".to_string())];
 
-        assert_eq!(result, RespType::Array(expected, vec![]));
+        assert_eq!(result, RespType::Array(expected));
     }
 
     #[test]
@@ -79,12 +79,10 @@ mod tests {
 
         let expected = vec![RespType::BulkString(
             "PING".to_string(),
-            vec![],
         ), RespType::BulkString(
             "PONG".to_string(),
-            vec![],
         )];
 
-        assert_eq!(result, RespType::Array(expected, vec![]));
+        assert_eq!(result, RespType::Array(expected));
     }
 }
