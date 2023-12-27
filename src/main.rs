@@ -17,7 +17,9 @@ fn listen_and_serve(listener: TcpListener) {
         match stream {
             Ok(stream) => {
                 thread::spawn(move || {
-                    handle_response(stream);
+                    loop {
+                        handle_response(&stream);
+                    }
                 });
             }
             Err(e) => {
@@ -27,9 +29,9 @@ fn listen_and_serve(listener: TcpListener) {
     }
 }
 
-fn handle_response(stream: TcpStream) {
-    let mut reader = BufReader::new(&stream);
-    let mut writer = BufWriter::new(&stream);
+fn handle_response(stream: &TcpStream) {
+    let mut reader = BufReader::new(stream);
+    let mut writer = BufWriter::new(stream);
 
     let parsed = parser::parse(&mut reader);
 
